@@ -123,7 +123,7 @@ class TopicMetadata:
 
 
 class SalInfo:
-    """DDS information for one SAL component and its DDS partition
+    r"""DDS information for one SAL component and its DDS partition
 
     Parameters
     ----------
@@ -137,7 +137,7 @@ class SalInfo:
     Raises
     ------
     RuntimeError
-        If environment variable ``LSST_DDS_DOMAIN`` is not defined.
+        If environment variable ``LSST_DDS_PARTITION_PREFIX`` is not defined.
     RuntimeError
         If the IDL file cannot be found for the specified ``name``.
     TypeError
@@ -156,12 +156,18 @@ class SalInfo:
     indexed : `bool`
         `True` if this SAL component is indexed (meaning a non-zero index
         is allowed), `False` if not.
+    identity : `str`
+        Value used for the private_identity field of DDS messages.
+        Defaults to username@host, but CSCs should use the CSC name:
+        * SAL_component_name for a non-indexed SAL component
+        * SAL_component_name:index for an indexed SAL component.
     isopen : `bool`
         Is this read topic open? `True` until `close` is called.
     log : `logging.Logger`
         A logger.
-    partition_name : `str`
-        The DDS partition name, from environment variable ``LSST_DDS_DOMAIN``.
+    partition_prefix : `str`
+        The DDS partition name prefix, from environment variable
+        ``LSST_DDS_PARTITION_PREFIX``.
     publisher : ``dds.Publisher``
         A DDS publisher, used to create DDS writers.
     subscriber : ``dds.Subscriber``
@@ -195,7 +201,7 @@ class SalInfo:
     <https://ts-salobj.lsst.io/configuration.html#environment_variables>`_;
     follow the link for details:
 
-    * ``LSST_DDS_DOMAIN`` (required): the DDS partition name.
+    * ``LSST_DDS_PARTITION_PREFIX`` (required): the DDS partition name.
     * ``LSST_DDS_HISTORYSYNC``, optional: time limit (sec)
       for waiting for historical (late-joiner) data.
 
@@ -208,6 +214,21 @@ class SalInfo:
     for cleanup using a weak reference to avoid circular dependencies.
     You may safely close a `SalInfo` before closing its domain,
     and this is recommended if you create and destroy many remotes.
+
+    **DDS Partition Names**
+
+    The DDS partition name for each topic is {prefix}.{name}.{suffix}, where:
+
+    * ``prefix`` = $LSST_DDS_PARTITION_PREFIX
+      (fall back to $LSST_DDS_DOMAIN if necessary).
+    * ``name`` = the ``name`` constructor argument.
+    * ``suffix`` = "cmd" for command topics, and "data" for all other topics,
+      including ``ackcmd``.
+
+    The idea is that each `Remote` and `Controller` should have just one
+    subscriber and one publisher, and that the durability service for
+    a `Controller` will not read topics that a controller writes:
+    events, telemetry, and the ``ackcmd`` topic.
     """
 
     def __init__(self, domain, name, index=0):
@@ -217,6 +238,7 @@ class SalInfo:
         self.domain = domain
         self.name = name
         self.index = 0 if index is None else int(index)
+        self.identity = domain.default_identity
         self.start_called = False
 
         # Dict of SAL topic name: wait_for_historical_data succeeded
@@ -227,19 +249,17 @@ class SalInfo:
         # Create the publisher and subscriber. Both depend on the DDS
         # partition, and so are created here instead of in Domain,
         # where most similar objects are created.
-        self.partition_name = os.environ.get("LSST_DDS_DOMAIN")
-        if self.partition_name is None:
-            raise RuntimeError("Environment variable $LSST_DDS_DOMAIN not defined")
-
-        partition_qos_policy = dds.PartitionQosPolicy([self.partition_name])
-
-        publisher_qos = domain.qos_provider.get_publisher_qos()
-        publisher_qos.set_policies([partition_qos_policy])
-        self.publisher = domain.participant.create_publisher(publisher_qos)
-
-        subscriber_qos = domain.qos_provider.get_subscriber_qos()
-        subscriber_qos.set_policies([partition_qos_policy])
-        self.subscriber = domain.participant.create_subscriber(subscriber_qos)
+        self.partition_prefix = os.environ.get("LSST_DDS_PARTITION_PREFIX")
+        if self.partition_prefix is None:
+            self.partition_prefix = os.environ.get("LSST_DDS_DOMAIN")
+            if self.partition_prefix is None:
+                raise RuntimeError(
+                    "Environment variable $LSST_DDS_PARTITION_PREFIX not defined"
+                )
+            warnings.warn(
+                "$LSST_DDS_PARTITION_PREFIX not defined; using deprecated $LSST_DDS_DOMAIN instead",
+                DeprecationWarning,
+            )
 
         self.start_task = asyncio.Future()
         self.done_task = asyncio.Future()
@@ -250,6 +270,12 @@ class SalInfo:
 
         self.authorized_users = set()
         self.non_authorized_cscs = set()
+
+        # Publishers and subscribers; create at need to avoid
+        self._cmd_publisher = None
+        self._cmd_subscriber = None
+        self._data_publisher = None
+        self._data_subscriber = None
 
         # dict of private_seqNum: salobj.topics.CommandInfo
         self._running_cmds = dict()
@@ -272,12 +298,20 @@ class SalInfo:
         self._waitset.attach(self._guardcond)
         self._read_loop_task = base.make_done_future()
 
-        idl_path = domain.idl_dir / f"sal_revCoded_{self.name}.idl"
+        if self.is_sal:
+            idl_path = domain.idl_dir / f"sal_revCoded_{self.name}.idl"
+        else:
+            idl_path = domain.idl_dir / f"{self.name}.idl"
         if not idl_path.is_file():
             raise RuntimeError(
                 f"Cannot find IDL file {idl_path} for name={self.name!r}"
             )
-        self.metadata = idl_metadata.parse_idl(name=self.name, idl_path=idl_path)
+        if self.is_sal:
+            self.metadata = idl_metadata.parse_idl(name=self.name, idl_path=idl_path)
+        else:
+            self.metadata = idl_metadata.parse_nonsal_idl(
+                name=self.name, idl_path=idl_path
+            )
         self.parse_metadata()  # Adds self.indexed, self.revnames, etc.
         if self.index != 0 and not self.indexed:
             raise ValueError(
@@ -298,11 +332,7 @@ class SalInfo:
             return
         # Note: ReadTopic's reader filters out ackcmd samples
         # for commands issued by other remotes.
-        # Except... TODO DM-25474: delete the following if statement
-        # and enable the identity test in ReadTopic's read query
-        # once all CSCs echo identity in their ackcmd topics.
-        # See the TODO in read_topic.py for more information.
-        if data.identity and data.identity != self.domain.identity:
+        if data.identity and data.identity != self.identity:
             # This ackcmd is for a command issued by a different Remote,
             # so ignore it.
             return
@@ -339,6 +369,81 @@ class SalInfo:
         if len(self.command_names) == 0:
             raise RuntimeError("This component has no commands, so no ackcmd topic")
         return self._ackcmd_type.topic_data_class
+
+    @property
+    def cmd_partition_name(self):
+        """Partition name for command topics."""
+        return f"{self.partition_prefix}.{self.name}.cmd"
+
+    @property
+    def data_partition_name(self):
+        """Partition name for non-command topics."""
+        return f"{self.partition_prefix}.{self.name}.data"
+
+    @property
+    def cmd_publisher(self):
+        if self._cmd_publisher is None:
+            partition_name = self.cmd_partition_name
+            partition_qos_policy = dds.PartitionQosPolicy([partition_name])
+
+            publisher_qos = self.domain.qos_provider.get_publisher_qos()
+            publisher_qos.set_policies([partition_qos_policy])
+            self._cmd_publisher = self.domain.participant.create_publisher(
+                publisher_qos
+            )
+
+        return self._cmd_publisher
+
+    @property
+    def cmd_subscriber(self):
+        if self._cmd_subscriber is None:
+            partition_name = self.cmd_partition_name
+            partition_qos_policy = dds.PartitionQosPolicy([partition_name])
+
+            subscriber_qos = self.domain.qos_provider.get_subscriber_qos()
+            subscriber_qos.set_policies([partition_qos_policy])
+            self._cmd_subscriber = self.domain.participant.create_subscriber(
+                subscriber_qos
+            )
+
+        return self._cmd_subscriber
+
+    @property
+    def data_publisher(self):
+        if self._data_publisher is None:
+            partition_name = self.data_partition_name
+            partition_qos_policy = dds.PartitionQosPolicy([partition_name])
+
+            publisher_qos = self.domain.qos_provider.get_publisher_qos()
+            publisher_qos.set_policies([partition_qos_policy])
+            self._data_publisher = self.domain.participant.create_publisher(
+                publisher_qos
+            )
+
+        return self._data_publisher
+
+    @property
+    def data_subscriber(self):
+        if self._data_subscriber is None:
+            partition_name = self.data_partition_name
+            partition_qos_policy = dds.PartitionQosPolicy([partition_name])
+
+            subscriber_qos = self.domain.qos_provider.get_subscriber_qos()
+            subscriber_qos.set_policies([partition_qos_policy])
+            self._data_subscriber = self.domain.participant.create_subscriber(
+                subscriber_qos
+            )
+
+        return self._data_subscriber
+
+    @property
+    def is_sal(self):
+        """Is this for one of our own SAL components?
+
+        The only supported alternative is OpenSplice's DDS IDL file,
+        but we may expand that at some point.
+        """
+        return self.name != "DDS"
 
     @property
     def name_index(self):
@@ -429,12 +534,12 @@ class SalInfo:
         """Deprecated version of make_ackcmd."""
         # TODO DM-26518: remove this method
         warnings.warn(
-            f"makeAckCmd is deprecated; use make_ackcmd instead.", DeprecationWarning
+            "makeAckCmd is deprecated; use make_ackcmd instead.", DeprecationWarning
         )
         return self.make_ackcmd(*args, **kwargs)
 
     def __repr__(self):
-        return f"SalBase({self.name}, {self.index})"
+        return f"SalInfo({self.name}, {self.index})"
 
     def parse_metadata(self):
         """Parse the IDL metadata to generate some attributes.
@@ -452,17 +557,23 @@ class SalInfo:
         event_names = []
         telemetry_names = []
         revnames = {}
-        for topic_metadata in self.metadata.topic_info.values():
-            sal_topic_name = topic_metadata.sal_name
-            if sal_topic_name.startswith("command_"):
-                command_names.append(sal_topic_name[8:])
-            elif sal_topic_name.startswith("logevent_"):
-                event_names.append(sal_topic_name[9:])
-            elif sal_topic_name != "ackcmd":
+        if self.is_sal:
+            for topic_metadata in self.metadata.topic_info.values():
+                sal_topic_name = topic_metadata.sal_name
+                if sal_topic_name.startswith("command_"):
+                    command_names.append(sal_topic_name[8:])
+                elif sal_topic_name.startswith("logevent_"):
+                    event_names.append(sal_topic_name[9:])
+                elif sal_topic_name != "ackcmd":
+                    telemetry_names.append(sal_topic_name)
+                revnames[
+                    sal_topic_name
+                ] = f"{self.name}::{sal_topic_name}_{topic_metadata.version_hash}"
+        else:
+            for topic_metadata in self.metadata.topic_info.values():
+                sal_topic_name = topic_metadata.sal_name
                 telemetry_names.append(sal_topic_name)
-            revnames[
-                sal_topic_name
-            ] = f"{self.name}::{sal_topic_name}_{topic_metadata.version_hash}"
+                revnames[sal_topic_name] = f"{self.name}::{sal_topic_name}"
 
         # Examine last topic (or any topic) to see if component is indexed.
         indexed_field_name = f"{self.name}ID"

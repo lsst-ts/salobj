@@ -71,7 +71,7 @@ class BaseScriptTestCase(asynctest.TestCase):
     """
 
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
         self.datadir = os.path.abspath(os.path.join(os.path.dirname(__file__), "data"))
         self.index = next(index_gen)
 

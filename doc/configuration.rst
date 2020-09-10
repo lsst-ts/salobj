@@ -40,8 +40,10 @@ Used by `Vortex OpenSplice`_, and thus indirectly by `Domain`:
 
 Used by `SalInfo`:
 
-* ``LSST_DDS_DOMAIN`` (required): the DDS partition name (*not* the DDS domain, despite the name).
-  This is read by `SalInfo` so that different instances of `SalInfo` can communicate with different DDS partitions, even though all share the same `Domain`.
+* ``LSST_DDS_PARTITION_PREFIX`` (required): a prefix for DDS partition names.
+  This is read by `SalInfo` so that different instances of `SalInfo` (thus different `Remote`\ s and `Controller`\ s) can communicate with different DDS partitions, even though all share the same `Domain`.
+  See `SalInfo` for DDS partition name details.
+* ``LSST_DDS_DOMAIN`` (deprecated): a deprecated alias for ``LSST_DDS_PARTITION_PREFIX`` that is used if ``LSST_DDS_PARTITION_PREFIX`` is not defined.
 * ``LSST_DDS_HISTORYSYNC`` (optional): time limit (sec) for waiting for historical (late-joiner) data.
   If, and only if, you are running DDS without a durability service then set this negative to avoid waiting for historical data.
 

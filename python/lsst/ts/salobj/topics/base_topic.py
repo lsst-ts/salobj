@@ -91,7 +91,10 @@ class BaseTopic(abc.ABC):
                     f"Could not find {self.salinfo.name} topic {self.sal_name}"
                 )
             self.dds_name = revname.replace("::", "_")
-            self.rev_code = self.dds_name[-8:]
+            if self.salinfo.is_sal:
+                self.rev_code = self.dds_name.rsplit("_", 1)[1]
+            else:
+                self.rev_code = ""
 
             self._type = ddsutil.get_dds_classes_from_idl(
                 salinfo.metadata.idl_path, revname

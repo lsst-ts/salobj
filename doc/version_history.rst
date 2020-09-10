@@ -13,6 +13,7 @@ Backward Incompatible Changes:
 
 * Telemetry topics now have volatile durability.
   All SAL components on your system must use ts_salobj 6 and ts_sal 5 or newer.
+* Topics use a new DDS partition naming scheme that is incompatible with ts_sal 4 and ts_salobj 5.
 * Requires ts_xml 6 and IDL files built with ts_sal 5 or later, for authorization support.
 * Removed deprecated ``main`` method from `BaseCsc` and `BaseScript`.
   Call `BaseCsc.amain` or `BaseScript.amain` instead, e.g. ``asyncio.run(MyCSC(index=...))`` or ``asyncio.run(MyScript.amain())``.
@@ -28,6 +29,8 @@ Backward Incompatible Changes:
   when beginning to execute a command that will take significant time before it is reported as ``CMD_COMPLETE``.
 * Removed the deprecated `SalInfo.idl_loc` property; use ``SalInfo.metadata.idl_path`` instead.
 * The `force_output` argument to `topics.ControllerEvent.set_put` is now keyword-only.
+* Removed the deprecated `max_history` argument from `topics.ControllerCommand`\ 's constructor.
+  Commands are volatile, so historical data is not available.
 * Removed ``bin/purge_topics.py`` command-line script, because it is no longer needed.
 
 Deprecations:
@@ -41,6 +44,8 @@ Deprecations:
     Start your simulator in whichever other method seems most appropriate.
   * Deprecated the need to override `BaseCsc.add_arguments` and `BaseCsc.add_kwargs_from_args` to add the ``--simulate`` command-line argument.
     This argument is added automatically if ``valid_simulation_modes`` has more than one entry.
+* Renamed environment variable ``LSST_DDS_DOMAIN`` to ``LSST_DDS_PARTITION_PREFIX``.
+  The old environment variable is used, with a deprecation warning, if the new one is not defined.
 * Renamed `SalInfo.makeAckCmd` to `SalInfo.make_ackcmd`.
   The old method is still available, but issues a deprecation warning.
 * Renamed `ControllerCommand.ackInProgress` to `ControllerCommand.ack_in_progress` and added a required `timeout` argument.
@@ -52,15 +57,18 @@ Deprecations:
 
 Changes:
 
-* Implemented authorization support.
+* Implemented authorization support, though that is off by default for now.
   This will not be complete until ts_sal has full support.
 * Simplified the simulation support in CSCs, as explained in Deprecations above.
+* Added ``--loglevel`` and ``--version`` arguments to `BaseCsc`\ 's command-line argument parser.
 * `CscCommander` now rounds float arrays when displaying events and telemetry (it already rounded float scalars).
 * Added support for running without a durability service:
   set environment variable ``LSST_DDS_HISTORYSYNC`` to a negative value to prevent waiting for historical data.
 * Added the `get_opensplice_version` function.
 * If a command is acknowledged with ``CMD_INPROGRESS`` then the command timeout is extended by the ``timeout`` value in the acknowledgement.
   Thus a slow command will need a long timeout as long as command issues a ``CMD_INPROGRESS`` acknowledgement with a reasonable ``timeout`` value.
+* Added the ``settingsToApply`` argument to `BaseCscTestCase.check_standard_state_transitions`,
+  to allow testing CSCs that do not have a default configuration.
 * Environment variable ``LSST_DDS_IP`` is no longer used.
 * The ``private_host`` field of DDS topics is no longer read nor set.
 * Updated the git pre-commit hook to prevent the commit if black formatting needed.
@@ -68,6 +76,8 @@ Changes:
 * Update ``Jenkinsfile`` to disable concurrent builds and clean up old log files.
 * Removed the ``.travis.yml`` file because it duplicates testing done in Jenkins.
 * Use `asynco.create_task` instead of deprecated `asyncio.ensure_future`.
+* Read topics now use ``DDS_READ_QUEUE_LEN`` as the default value for ``queue_len``.
+  They have the same value, but this makes it easier and safer to change ``DDS_READ_QUEUE_LEN`` in future.
 
 Requirements:
 
@@ -126,7 +136,7 @@ v5.16.0
 
 Changes:
 
-* Add the ``filter_ackcmd`` argument to `ReadTopic`\ s constructor.
+* Add the ``filter_ackcmd`` argument to `ReadTopic`\ 's constructor.
 * Improve Jenkins.conda cleanup.
 
 Requirements:

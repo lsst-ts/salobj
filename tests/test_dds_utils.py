@@ -26,7 +26,7 @@ from lsst.ts import salobj
 
 class DdsUtilsTestCase(unittest.TestCase):
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
 
     def test_get_dds_version(self):
         for dds_file, desired_version in (

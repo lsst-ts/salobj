@@ -190,7 +190,12 @@ class BaseCsc(Controller):
         """
         parser = argparse.ArgumentParser(f"Run {cls.__name__}")
         if index is True:
-            parser.add_argument("index", type=int, help="Script SAL Component index.")
+            parser.add_argument("index", type=int, help="SAL index.")
+        parser.add_argument(
+            "--loglevel",
+            type=int,
+            help="log level: error=40, warning=30, info=20, debug=10",
+        )
         add_simulate_arg = (
             cls.valid_simulation_modes is not None
             and len(cls.valid_simulation_modes) > 1
@@ -221,6 +226,18 @@ class BaseCsc(Controller):
                     default=default_simulation_mode,
                     choices=cls.valid_simulation_modes,
                 )
+
+        try:
+            # Import __version__ this here because it is not available
+            # when base_csc is first imported.
+            from . import __version__
+
+            parser.add_argument("--version", action="version", version=__version__)
+        except ImportError:
+            warnings.warn(
+                "No --version command-line argument because __version__ is unavailable.",
+                RuntimeWarning,
+            )
         cls.add_arguments(parser)
 
         args = parser.parse_args()
@@ -234,7 +251,10 @@ class BaseCsc(Controller):
             kwargs["simulation_mode"] = args.simulate
         cls.add_kwargs_from_args(args=args, kwargs=kwargs)
 
-        return cls(**kwargs)
+        csc = cls(**kwargs)
+        if args.loglevel is not None:
+            csc.log.setLevel(args.loglevel)
+        return csc
 
     @classmethod
     async def amain(cls, index, **kwargs):

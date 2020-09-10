@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import asyncio
+import contextlib
 import itertools
 import logging
 import os
@@ -44,6 +45,15 @@ np.random.seed(47)
 index_gen = salobj.index_generator()
 TEST_DATA_DIR = TEST_CONFIG_DIR = pathlib.Path(__file__).resolve().parent / "data"
 TEST_CONFIG_DIR = TEST_DATA_DIR / "config"
+
+
+def all_permutations(items):
+    """Return all permutations of a list of items and of all sublists,
+    including [].
+    """
+    for i in range(len(items) + 1):
+        for val in itertools.permutations(items, r=i):
+            yield val
 
 
 class FailInReportFaultCsc(salobj.TestCsc):
@@ -98,131 +108,153 @@ class CommunicateTestCase(salobj.BaseCscTestCase, asynctest.TestCase):
             simulation_mode=simulation_mode,
         )
 
+    @contextlib.asynccontextmanager
+    async def make_remote(
+        self, identity,
+    ):
+        """Create a remote to talk to self.csc with a specified identity.
+
+        Uses the domain created by make_csc.
+
+        Parameters
+        ----------
+        identity : `str`
+            Identity for remote.
+
+        Notes
+        -----
+        Adds a logging.StreamHandler if one is not alread present.
+        """
+        domain = self.csc.domain
+        original_default_identity = domain.default_identity
+        try:
+            domain.default_identity = identity
+            remote = salobj.Remote(
+                domain=domain, name=self.csc.salinfo.name, index=self.csc.salinfo.index,
+            )
+        finally:
+            domain.default_identity = original_default_identity
+        self.assertEqual(remote.salinfo.identity, identity)
+        try:
+            await remote.start_task
+            yield remote
+        finally:
+            await remote.close()
+
     async def test_authorization(self):
         """Test authorization.
 
-        This test authorization checking.
-        For simplicity it calls setAuthList without a +/- prefix.
+        For simplicity this test calls setAuthList without a +/- prefix.
         The prefix is tested elsewhere.
         """
         async with self.make_csc(initial_state=salobj.State.ENABLED):
+            # TODO DM-26605 remove this line as no longer needed:
+            self.csc.authorize = True
             await self.assert_next_sample(
                 self.remote.evt_authList, authorizedUsers="", nonAuthorizedCSCs="",
             )
 
-            # Note that the CSC and remote have the same user_host
-            # (until the tests changes the value for the remote).
-            csc_user_host = self.csc.salinfo.domain.user_host
+            domain = self.csc.salinfo.domain
 
-            # Test non-authorized CSCs
-            # Reported non-auth CSCs should always be in alphabetical order;
-            # test this by sending CSC names NOT in alphabetical order.
-            all_csc_names = ["Test:5", "Script:5", "ATDome"]
-            for i in range(len(all_csc_names)):
-                csc_names = all_csc_names[:i]
-                csc_names_str = ", ".join(csc_names)
-                with self.subTest(csc_names_str=csc_names_str):
-                    await self.remote.cmd_setAuthList.set_start(
-                        nonAuthorizedCSCs=csc_names_str, timeout=STD_TIMEOUT
-                    )
-                    await self.assert_next_sample(
-                        self.remote.evt_authList,
-                        authorizedUsers="",
-                        nonAuthorizedCSCs=", ".join(sorted(csc_names)),
-                    )
-                    for j, csc_name in enumerate(all_csc_names):
-                        with self.subTest(j=j, csc_name=csc_name):
-                            self.remote.salinfo.domain.identity = csc_name
-                            if j < i:
-                                # A blocked CSC; this should fail.
-                                with salobj.assertRaisesAckError(
-                                    ack=salobj.SalRetCode.CMD_NOPERM
-                                ):
-                                    await self.remote.cmd_wait.set_start(
-                                        duration=0, timeout=STD_TIMEOUT
-                                    )
-                            else:
-                                # Not a blocked CSC; this should work.
-                                await self.remote.cmd_wait.set_start(
+            # Note that self.csc and self.remote have the same user_host.
+            csc_user_host = domain.user_host
+
+            # Make a remote that pretends to be from a different CSC
+            # and test non-authorized CSCs
+            other_name_index = "Script:5"
+            async with self.make_remote(identity=other_name_index) as other_csc_remote:
+
+                all_csc_names = ["ATDome", "Hexapod:1", other_name_index]
+                for csc_names in all_permutations(all_csc_names):
+                    csc_names_str = ", ".join(csc_names)
+                    with self.subTest(csc_names_str=csc_names_str):
+                        await self.remote.cmd_setAuthList.set_start(
+                            nonAuthorizedCSCs=csc_names_str, timeout=STD_TIMEOUT
+                        )
+                        await self.assert_next_sample(
+                            self.remote.evt_authList,
+                            authorizedUsers="",
+                            nonAuthorizedCSCs=", ".join(sorted(csc_names)),
+                        )
+                        if other_name_index in csc_names:
+                            # A blocked CSC; this should fail.
+                            with salobj.assertRaisesAckError(
+                                ack=salobj.SalRetCode.CMD_NOPERM
+                            ):
+                                await other_csc_remote.cmd_wait.set_start(
                                     duration=0, timeout=STD_TIMEOUT
                                 )
+                        else:
+                            # Not a blocked CSC; this should work.
+                            await other_csc_remote.cmd_wait.set_start(
+                                duration=0, timeout=STD_TIMEOUT
+                            )
 
-                    # My user_host should work regardless of
-                    # non-authorized CSCs.
-                    self.remote.salinfo.domain.identity = csc_user_host
-                    await self.remote.cmd_wait.set_start(
-                        duration=0, timeout=STD_TIMEOUT
-                    )
-
-            # At this point all CSC names in the list are blocked.
-            # Temporarily disable authorization and try again;
-            # the command should be allowed for all CSC names.
-            self.csc.cmd_wait.authorize = False
-            try:
-                for csc_name in csc_names:
-                    with self.subTest(csc_name=csc_name):
-                        self.remote.salinfo.domain.identity = csc_name
+                        # My user_host should work regardless of
+                        # non-authorized CSCs.
                         await self.remote.cmd_wait.set_start(
                             duration=0, timeout=STD_TIMEOUT
                         )
-            finally:
-                self.csc.cmd_wait.authorize = True
+
+                        # Disabling authorization should always work
+                        self.csc.cmd_wait.authorize = False
+                        try:
+                            await other_csc_remote.cmd_wait.set_start(
+                                duration=0, timeout=STD_TIMEOUT
+                            )
+                        finally:
+                            self.csc.cmd_wait.authorize = True
 
             # Test authorized users that are not me.
             # Reported auth users should always be in alphabetical order;
             # test this by sending users NOT in alphabetical order.
-            self.remote.salinfo.domain.identity = csc_user_host
             all_other_user_hosts = [f"notme{i}{csc_user_host}" for i in (3, 2, 1)]
-            for i in range(len(all_other_user_hosts)):
-                other_user_hosts = all_other_user_hosts[:i]
-                users_str = ", ".join(other_user_hosts)
-                with self.subTest(users_str=users_str):
-                    await self.remote.cmd_setAuthList.set_start(
-                        authorizedUsers=users_str,
-                        nonAuthorizedCSCs="",
-                        timeout=STD_TIMEOUT,
-                    )
-                    await self.assert_next_sample(
-                        self.remote.evt_authList,
-                        authorizedUsers=", ".join(sorted(other_user_hosts)),
-                        nonAuthorizedCSCs="",
-                    )
-                    for j, user_host in enumerate(all_other_user_hosts):
-                        with self.subTest(j=j, user_host=user_host):
-                            self.remote.salinfo.domain.identity = user_host
-                            if j < i:
-                                # An allowed user; this should work.
-                                await self.remote.cmd_wait.set_start(
+            other_user_host = all_other_user_hosts[1]
+
+            async with self.make_remote(identity=other_user_host) as other_user_remote:
+                for auth_user_hosts in all_permutations(all_other_user_hosts):
+                    users_str = ", ".join(auth_user_hosts)
+                    with self.subTest(users_str=users_str):
+                        await self.remote.cmd_setAuthList.set_start(
+                            authorizedUsers=users_str,
+                            nonAuthorizedCSCs="",
+                            timeout=STD_TIMEOUT,
+                        )
+                        await self.assert_next_sample(
+                            self.remote.evt_authList,
+                            authorizedUsers=", ".join(sorted(auth_user_hosts)),
+                            nonAuthorizedCSCs="",
+                        )
+                        if other_user_host in auth_user_hosts:
+                            # An allowed user; this should work.
+                            await other_user_remote.cmd_wait.set_start(
+                                duration=0, timeout=STD_TIMEOUT
+                            )
+                        else:
+                            # Not an allowed user; this should fail.
+                            with salobj.assertRaisesAckError(
+                                ack=salobj.SalRetCode.CMD_NOPERM
+                            ):
+                                await other_user_remote.cmd_wait.set_start(
                                     duration=0, timeout=STD_TIMEOUT
                                 )
-                            else:
-                                # Not an allowed user; this should fail.
-                                with salobj.assertRaisesAckError(
-                                    ack=salobj.SalRetCode.CMD_NOPERM
-                                ):
-                                    await self.remote.cmd_wait.set_start(
-                                        duration=0, timeout=STD_TIMEOUT
-                                    )
 
-                    # Temporarily disable authorization and try again;
-                    # the command should be allowed for all user_hosts.
-                    self.csc.cmd_wait.authorize = False
-                    try:
-                        for user_host in all_other_user_hosts:
-                            with self.subTest(user_host=user_host):
-                                self.remote.salinfo.domain.identity = user_host
-                                await self.remote.cmd_wait.set_start(
-                                    duration=0, timeout=STD_TIMEOUT
-                                )
-                    finally:
-                        self.csc.cmd_wait.authorize = True
+                        # Temporarily disable authorization and try again;
+                        # this should always work.
+                        self.csc.cmd_wait.authorize = False
+                        try:
+                            await other_user_remote.cmd_wait.set_start(
+                                duration=0, timeout=STD_TIMEOUT
+                            )
+                        finally:
+                            self.csc.cmd_wait.authorize = True
 
-                    # My user_host should work regardless of
-                    # authorized users.
-                    self.remote.salinfo.domain.identity = csc_user_host
-                    await self.remote.cmd_wait.set_start(
-                        duration=0, timeout=STD_TIMEOUT
-                    )
+                        # My user_host should work regardless of
+                        # authorized users.
+                        self.remote.salinfo.domain.identity = csc_user_host
+                        await self.remote.cmd_wait.set_start(
+                            duration=0, timeout=STD_TIMEOUT
+                        )
 
     async def test_set_auth_list_prefix(self):
         """Test the setAuthList command with a +/- prefix
@@ -592,10 +624,13 @@ class CommunicateTestCase(salobj.BaseCscTestCase, asynctest.TestCase):
         * standby: DISABLED or FAULT to STANDBY
         * exitControl: STANDBY to OFFLINE (quit)
         """
-        async with self.make_csc(initial_state=salobj.State.STANDBY):
+        async with self.make_csc(
+            initial_state=salobj.State.STANDBY, config_dir=TEST_CONFIG_DIR
+        ):
             await self.check_standard_state_transitions(
                 enabled_commands=("setArrays", "setScalars", "wait"),
                 skip_commands=("fault",),
+                settingsToApply="all_fields",
             )
 
 
@@ -636,7 +671,7 @@ class TestCscConstructorTestCase(asynctest.TestCase):
     """
 
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
 
     async def test_initial_state(self):
         """Test all allowed initial_state values, both as enums and ints."""
@@ -689,7 +724,7 @@ class SimulationModeTestCase(asynctest.TestCase):
     """
 
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
         # Valid simulation modes that will exercise several things:
         # If 0 is present it is the default,
         # otherwise the first value is the default.
@@ -1226,7 +1261,7 @@ class ControllerCommandLoggingTestCase(salobj.BaseCscTestCase, asynctest.TestCas
 
 class BaseCscMakeFromCmdLineTestCase(asynctest.TestCase):
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
         self.original_argv = sys.argv[:]
 
     def tearDown(self):

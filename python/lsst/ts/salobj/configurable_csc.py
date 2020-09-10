@@ -480,7 +480,7 @@ class ConfigurableCsc(BaseCsc, abc.ABC):
     def add_arguments(cls, parser):
         parser.add_argument(
             "--configdir",
-            help="Directory containing configuration files for the start command.",
+            help="directory containing configuration files for the start command.",
         )
 
     @classmethod

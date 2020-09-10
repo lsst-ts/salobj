@@ -54,7 +54,7 @@ class ControllerWithDoMethods(salobj.Controller):
 
 class ControllerConstructorTestCase(asynctest.TestCase):
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
 
     async def test_do_callbacks_false(self):
         index = next(index_gen)
@@ -65,7 +65,7 @@ class ControllerConstructorTestCase(asynctest.TestCase):
                     cmd = getattr(controller, "cmd_" + name)
                     self.assertFalse(cmd.has_callback)
 
-            self.assertEqual(controller.salinfo.domain.identity, f"Test:{index}")
+            self.assertEqual(controller.salinfo.identity, f"Test:{index}")
 
     async def test_do_callbacks_true(self):
         index = next(index_gen)

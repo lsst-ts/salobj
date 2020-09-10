@@ -211,9 +211,7 @@ class TopicsTestCase(salobj.BaseCscTestCase, asynctest.TestCase):
             # * The second is acknowledged with a different identity.
             # * The third is acknowledged with identity=""
             # * The last is acknowledged normally
-            # The first two will not complete, the second two will.
-            # TODO DM-25474: modify this test to expect the third to fail,
-            # once we can expect identity to always be set.
+            # The first three will not complete, the last will.
             nread = 0
 
             def reader_callback(data):
@@ -255,10 +253,10 @@ class TopicsTestCase(salobj.BaseCscTestCase, asynctest.TestCase):
             tasks = []
             for i in range(4):
                 tasks.append(asyncio.create_task(cmdwriter.start(timeout=STD_TIMEOUT)))
-            await tasks[2]
             await tasks[3]
             self.assertFalse(tasks[0].done())  # Origin did not match.
             self.assertFalse(tasks[1].done())  # Identity did not match.
+            self.assertFalse(tasks[2].done())  # No identity.
             self.assertEqual(nread, 4)
             self.assertEqual(unfiltered_nread, 4)
             for task in tasks:
@@ -1184,10 +1182,10 @@ class TopicsTestCase(salobj.BaseCscTestCase, asynctest.TestCase):
                 prev_max_seq_num = cmd.max_seq_num
 
     async def test_partitions(self):
-        """Test specifying a DDS partition with $LSST_DDS_DOMAIN."""
+        """Test specifying a DDS partition with $LSST_DDS_PARTITION_PREFIX."""
         async with salobj.Domain() as domain:
             salinfo1 = salobj.SalInfo(domain=domain, name="Test", index=0)
-            salobj.set_random_lsst_dds_domain()
+            salobj.set_random_lsst_dds_partition_prefix()
             salinfo2 = salobj.SalInfo(domain=domain, name="Test", index=0)
             writer1 = salobj.topics.ControllerEvent(salinfo=salinfo1, name="errorCode")
             writer2 = salobj.topics.ControllerEvent(salinfo=salinfo2, name="errorCode")

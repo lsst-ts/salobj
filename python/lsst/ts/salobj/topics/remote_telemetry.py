@@ -23,6 +23,7 @@ __all__ = ["RemoteTelemetry"]
 
 import warnings
 
+from ..domain import DDS_READ_QUEUE_LEN
 from . import read_topic
 
 
@@ -38,11 +39,11 @@ class RemoteTelemetry(read_topic.ReadTopic):
     max_history : `int`, optional
         Deprecated because historical telemetry data is no longer available.
         Must be 0 (or None, but please don't do that) if specified.
-    queue_len : `int`
+    queue_len : `int`, optional
         Number of elements that can be queued for `get_oldest`.
     """
 
-    def __init__(self, salinfo, name, max_history=None, queue_len=100):
+    def __init__(self, salinfo, name, max_history=None, queue_len=DDS_READ_QUEUE_LEN):
         # TODO DM-26474: remove the max_history argument and this code block.
         if max_history is not None:
             if max_history == 0:

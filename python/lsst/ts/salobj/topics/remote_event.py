@@ -21,6 +21,7 @@
 
 __all__ = ["RemoteEvent"]
 
+from ..domain import DDS_READ_QUEUE_LEN
 from . import read_topic
 
 
@@ -38,11 +39,11 @@ class RemoteEvent(read_topic.ReadTopic):
 
         * 0 if none; strongly recommended for `RemoteCommand` & `AckCmdReader`
         * 1 is recommended for events and telemetry
-    queue_len : `int`
+    queue_len : `int`, optional
         Number of elements that can be queued for `get_oldest`.
     """
 
-    def __init__(self, salinfo, name, max_history=1, queue_len=100):
+    def __init__(self, salinfo, name, max_history=1, queue_len=DDS_READ_QUEUE_LEN):
         super().__init__(
             salinfo=salinfo,
             name=name,

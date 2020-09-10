@@ -24,7 +24,8 @@ __all__ = [
     "assertRaisesAckError",
     "assertRaisesAckTimeoutError",
     "assert_black_formatted",
-    "set_random_lsst_dds_domain",
+    "set_random_lsst_dds_domain",  # Deprecated
+    "set_random_lsst_dds_partition_prefix",
 ]
 
 import contextlib
@@ -33,6 +34,7 @@ import random
 import socket
 import subprocess
 import time
+import warnings
 
 import astropy.coordinates
 import astropy.units as u
@@ -133,8 +135,8 @@ def assert_black_formatted(dir):
         raise AssertionError(result.stderr)
 
 
-def set_random_lsst_dds_domain():
-    """Set a random value for environment variable LSST_DDS_DOMAIN
+def set_random_lsst_dds_partition_prefix():
+    """Set a random value for environment variable LSST_DDS_PARTITION_PREFIX
 
     Call this for each unit test method that uses SAL message passing,
     in order to avoid collisions with other tests. Note that pytest
@@ -149,4 +151,14 @@ def set_random_lsst_dds_domain():
     hostname = socket.gethostname()
     curr_time = time.time()
     random_int = random.randint(0, 999999)
-    os.environ["LSST_DDS_DOMAIN"] = f"Test-{hostname}-{curr_time}-{random_int}"
+    os.environ[
+        "LSST_DDS_PARTITION_PREFIX"
+    ] = f"Test-{hostname}-{curr_time}-{random_int}"
+
+
+def set_random_lsst_dds_domain():
+    """Deprecated version of `set_random_lsst_dds_partition_prefix`."""
+    warnings.warn(
+        "Use set_random_lsst_dds_partition_prefix instead", DeprecationWarning
+    )
+    set_random_lsst_dds_partition_prefix()

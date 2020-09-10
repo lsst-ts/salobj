@@ -55,7 +55,7 @@ def alternate_tai_from_utc_unix(utc_unix):
 
 class BasicsTestCase(asynctest.TestCase):
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
 
     async def test_assert_raises_ack_error(self):
         """Test the assertRaisesAckError function.
@@ -209,27 +209,33 @@ class BasicsTestCase(asynctest.TestCase):
             self.assertEqual(ackcmd.error, error)
 
     def test_set_random_lsst_dds_domain(self):
+        """Test that set_random_lsst_dds_domain is a deprecated
+        alias for set_random_lsst_dds_partition_prefix.
+        """
+        old_prefix = os.environ["LSST_DDS_PARTITION_PREFIX"]
+        with self.assertWarns(DeprecationWarning):
+            salobj.set_random_lsst_dds_domain()
+        new_prefix = os.environ["LSST_DDS_PARTITION_PREFIX"]
+        self.assertNotEqual(old_prefix, new_prefix)
+
+    def test_set_random_lsst_dds_partition_prefix(self):
         random.seed(42)
         NumToTest = 1000
         names = set()
         for i in range(NumToTest):
-            salobj.set_random_lsst_dds_domain()
-            name = os.environ.get("LSST_DDS_DOMAIN")
+            salobj.set_random_lsst_dds_partition_prefix()
+            name = os.environ.get("LSST_DDS_PARTITION_PREFIX")
             self.assertTrue(name)
             names.add(name)
         # any duplicate names will reduce the size of names
         self.assertEqual(len(names), NumToTest)
 
-    async def test_lsst_dds_domain_required(self):
-        del os.environ["LSST_DDS_DOMAIN"]
-
-        async with salobj.Domain() as domain:
-            with self.assertRaises(RuntimeError):
-                salobj.SalInfo(domain=domain, name="Test", index=1)
-
-    async def test_domain_origin(self):
+    async def test_domain_attr(self):
         async with salobj.Domain() as domain:
             self.assertEqual(domain.origin, os.getpid())
+
+            self.assertEqual(domain.user_host, salobj.get_user_host())
+            self.assertEqual(domain.default_identity, domain.user_host)
 
     def test_index_generator(self):
         with self.assertRaises(ValueError):

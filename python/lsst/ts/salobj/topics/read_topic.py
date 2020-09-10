@@ -240,7 +240,7 @@ class ReadTopic(BaseTopic):
         name,
         sal_prefix,
         max_history,
-        queue_len=100,
+        queue_len=DDS_READ_QUEUE_LEN,
         filter_ackcmd=True,
     ):
         super().__init__(salinfo=salinfo, name=name, sal_prefix=sal_prefix)
@@ -275,7 +275,11 @@ class ReadTopic(BaseTopic):
             if self.volatile
             else salinfo.domain.reader_qos
         )
-        self._reader = salinfo.subscriber.create_datareader(self._topic, qos)
+        if sal_prefix == "command_":
+            subscriber = salinfo.cmd_subscriber
+        else:
+            subscriber = salinfo.data_subscriber
+        self._reader = subscriber.create_datareader(self._topic, qos)
         # TODO DM-26411: replace ANY_INSTANCE_STATE with ALIVE_INSTANCE_STATE
         # once the OpenSplice issue 00020647 is fixed.
         read_mask = [
@@ -286,19 +290,18 @@ class ReadTopic(BaseTopic):
         if salinfo.index > 0:
             queries.append(f"{salinfo.name}ID = {salinfo.index}")
         if name == "ackcmd" and filter_ackcmd:
-            # TODO DM-25474: enable the identity test
-            # once all CSCs echo identity in their ackcmd topics
-            # (ts_salobj 6 and ts_sal 4.2 used everywhere).
-            # I tried to write a query that checks for
-            # identity='' or identity=salinfo.domain.origin
-            # but could not get OpenSplice to accept the empty string.
             queries += [
                 f"origin = {salinfo.domain.origin}",
-                # f"identity = '{salinfo.domain.identity}'",
+                f"identity = '{salinfo.identity}'",
             ]
         if queries:
             full_query = " AND ".join(queries)
-            read_condition = dds.QueryCondition(self._reader, read_mask, full_query)
+            try:
+                read_condition = dds.QueryCondition(self._reader, read_mask, full_query)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Could not create QueryCondition using full_query={full_query!r}"
+                ) from e
         else:
             read_condition = self._reader.create_readcondition(read_mask)
         self._read_condition = read_condition

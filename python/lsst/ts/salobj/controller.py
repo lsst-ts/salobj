@@ -174,8 +174,10 @@ class Controller:
         domain = Domain()
         try:
             self.salinfo = SalInfo(domain=domain, name=name, index=index)
+            new_identity = self.salinfo.name_index
+            self.salinfo.identity = new_identity
+            domain.default_identity = new_identity
             self.log = self.salinfo.log
-            self.salinfo.domain.identity = self.salinfo.name_index
             self.start_called = False
             # Task that is set done when the controller is closed
             self.done_task = asyncio.Future()

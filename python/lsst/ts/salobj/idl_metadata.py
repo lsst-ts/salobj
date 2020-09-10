@@ -19,7 +19,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-__all__ = ["IdlMetadata", "TopicMetadata", "FieldMetadata", "parse_idl"]
+__all__ = [
+    "IdlMetadata",
+    "TopicMetadata",
+    "FieldMetadata",
+    "parse_idl",
+    "parse_nonsal_idl",
+]
 
 import re
 
@@ -239,10 +245,63 @@ def parse_idl(name, idl_path):
                 elif topic_end_pattern.match(line):
                     topic_metadata = None
 
+    # Note: the field types are too complicated to be described
+    # by a FieldMetadata object, so leave that blank.
+
     return IdlMetadata(
         name=name,
         idl_path=idl_path,
         sal_version=sal_version,
         xml_version=xml_version,
+        topic_info=topic_info,
+    )
+
+
+def parse_nonsal_idl(name, idl_path):
+    """Parse a non-SAL idl file.
+
+    This has only been tested on the OpenSplice DDS IDL file,
+    but can be expanded to handle other non-SAL cases.
+
+    Parameters
+    ----------
+    name : str`
+        SAL component name, e.g. "ATPtg".
+    idl_path : `str`, `bytes`, or `pathlib.Path`
+        Path to IDL file
+
+    Returns
+    -------
+    metadata : `IdlMetadata`
+        Parsed metadata.
+    """
+    # List of field types used in IDL, excluding "unsigned".
+    topic_start_pattern = re.compile(
+        r"\s*#pragma\s+keylist\s+(?P<sal_topic_name>.+)\s+key"
+    )
+
+    # dict of sal_topic_name: `TopicMetadata`
+    topic_info = dict()
+
+    with open(idl_path, "r") as f:
+        for line in f:
+            # Look for the start of a new topic.
+            topic_match = topic_start_pattern.match(line)
+            if not topic_match:
+                continue
+
+            sal_topic_name = topic_match.group("sal_topic_name")
+            if sal_topic_name in topic_info:
+                raise RuntimeError(f"Already parsed data for topic {sal_topic_name}")
+            topic_metadata = TopicMetadata(
+                sal_name=sal_topic_name, version_hash="", description=None,
+            )
+            topic_info[sal_topic_name] = topic_metadata
+
+    return IdlMetadata(
+        name=name,
+        idl_path=idl_path,
+        sal_version=None,
+        xml_version=None,
         topic_info=topic_info,
     )

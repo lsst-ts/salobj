@@ -46,7 +46,7 @@ index_gen = salobj.index_generator()
 
 class SALPYTestCase(asynctest.TestCase):
     def setUp(self):
-        salobj.set_random_lsst_dds_domain()
+        salobj.set_random_lsst_dds_partition_prefix()
         self.datadir = pathlib.Path(__file__).resolve().parent / "data"
         self.index = next(index_gen)
 

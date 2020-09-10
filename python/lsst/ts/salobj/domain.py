@@ -34,7 +34,7 @@ from . import base
 DDS_READ_QUEUE_LEN = 100
 """Length of DDS read queue
 
-Warning: this must be equal to or longer than the queue length in the
+Warning: this must be equal to or greater than the queue length in the
 OpenSplice configuration file (pointed to by $OSPL_URI).
 This information is not available from ``dds`` objects, so I set queue depth
 instead of using the value specified in the QoS XML file.
@@ -52,12 +52,14 @@ class Domain:
         DDS domain participant.
     origin : `int`
         Process ID. Used to set the ``private_origin`` field of output samples.
-    identity : `str`
-        Value used for the private_identity field of DDS messages.
-        Domain initializes it to username@host but CSCs should
-        replace it with the CSC name:
-        * SAL_component_name for a non-indexed SAL component
-        * SAL_component_name:index for an indexed SAL component.
+    default_identity : `str`
+        Default value used for the identity field of `SalInfo`.
+        Initalized to ``user_host`` but `Controller`\ 's constructor
+        sets it to `SalInfo.user_index` so that all `Remote`\ s
+        constructed with the controller's domain will have the
+        controller's identity.
+        For testing purposes, it is allowed to change this field
+        before constructing a `Remote`.
     user_host : `str`
         username@host. This will match ``identity`` unless the latter
         is set to a CSC name.
@@ -144,11 +146,7 @@ class Domain:
         self.participant = None
 
         self.user_host = base.get_user_host()
-        # Initialize this assuming it is not for use by a Controller or CSC.
-        # Controller will override it. Controller does not know if the
-        # SAL component is indexed until after building its SalInfo,
-        # so the override cannot be provided as a constructor argument.
-        self.identity = self.user_host
+        self.default_identity = self.user_host
 
         # Accumulators for verifying that close is working.
         self.num_read_loops = 0
